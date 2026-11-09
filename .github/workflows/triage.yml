@@ -1,0 +1,34 @@
+name: Plane AI triage
+
+# ทุก 15 นาที (GitHub Actions อาจดีเลย์ได้ 5-15 นาที)
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: plane-triage
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run triage
+        env:
+          PLANE_URL: https://plane-wubbvrdcisw9wzkxth2tditj.coolify-app-2.thit.io
+          PLANE_WORKSPACE: thzi-gtm
+          PLANE_PROJECT_ID: 5e7d126a-3a15-4666-9996-96174d4d7f93
+          PLANE_API_KEY: ${{ secrets.PLANE_API_KEY }}
+          HUB_ISSUE_ID: 90d0f8e0-2724-4a40-8bb8-41ba12b4d0c4
+          AI_PROVIDER: groq
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_REPLY_COOLDOWN: "90"
+        run: python scripts/poll_plane.py --limit 3
