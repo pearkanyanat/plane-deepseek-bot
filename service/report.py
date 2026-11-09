@@ -106,6 +106,30 @@ def _days_since(value) -> int | None:
 # --------------------------------------------------------------------------
 
 
+def current_cycle() -> dict | None:
+    """รอบสัปดาห์ปัจจุบัน + ความคืบหน้า (ถ้ามี)"""
+    try:
+        rows = _api(f"workspaces/{PLANE_WORKSPACE}/projects/{PLANE_PROJECT_ID}/cycles/").get(
+            "results", []
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    today = datetime.now(TZ).date()
+    for c in rows:
+        start, end = _as_date(c.get("start_date")), _as_date(c.get("end_date"))
+        if not (start and end and start <= today <= end):
+            continue
+        try:
+            issues = _api(
+                f"workspaces/{PLANE_WORKSPACE}/projects/{PLANE_PROJECT_ID}/cycles/{c['id']}/cycle-issues/?per_page=100"
+            ).get("results", [])
+        except Exception:  # noqa: BLE001
+            issues = []
+        done = sum(1 for i in issues if i.get("completed_at"))
+        return {"name": c.get("name", "?"), "total": len(issues), "done": done}
+    return None
+
+
 def collect() -> dict:
     """ดึงข้อมูลและประเมินกฎ — คืนโครงที่พร้อม render"""
     project = {}
@@ -196,17 +220,30 @@ def collect() -> dict:
 
     order = {"high": 0, "med": 1, "info": 2}
     flags.sort(key=lambda f: (order[f["severity"]], f["ref"]))
-    return {"project": project.get("name", ""), "prefix": prefix, "date": today, "flags": flags}
+    return {
+        "project": project.get("name", ""),
+        "prefix": prefix,
+        "date": today,
+        "flags": flags,
+        "cycle": current_cycle(),
+    }
 
 
 def render_html(data: dict) -> str:
     flags = data["flags"]
+    cyc = data.get("cycle")
+    cycle_html = (
+        f"<p><strong>รอบสัปดาห์:</strong> {html.escape(cyc['name'])} — "
+        f"เสร็จ {cyc['done']}/{cyc['total']} งาน</p>"
+        if cyc
+        else ""
+    )
+    header = (
+        f"<p><strong>📋 ตรวจงานที่อาจถูกลืม</strong> — {html.escape(data['project'])} "
+        f"({data['prefix']}) วันที่ {data['date'].strftime('%d/%m/%Y')}</p>"
+    )
     if not flags:
-        return (
-            f"<p><strong>📋 ตรวจงานที่อาจถูกลืม</strong> — {html.escape(data['project'])} "
-            f"({data['prefix']}) วันที่ {data['date'].strftime('%d/%m/%Y')}</p>"
-            "<p>✓ ไม่พบงานที่ถูกลืม 🎉</p>"
-        )
+        return header + cycle_html + "<p>✓ ไม่พบงานที่ถูกลืม 🎉</p>"
 
     items_html = "".join(
         "<li>"
@@ -228,11 +265,11 @@ def render_html(data: dict) -> str:
     )
 
     return (
-        f"<p><strong>📋 ตรวจงานที่อาจถูกลืม</strong> — {html.escape(data['project'])} "
-        f"({data['prefix']}) วันที่ {data['date'].strftime('%d/%m/%Y')}</p>"
-        f"<p><strong>สรุปตามคน:</strong></p><ul>{summary}</ul>"
-        f"<p><strong>รายละเอียด:</strong></p><ul>{items_html}</ul>"
-        f'<p style="font-size:12px;color:#888">กฎ: ไม่ขยับเกิน {STALE_DAYS} วัน · '
+        header
+        + cycle_html
+        + f"<p><strong>สรุปตามคน:</strong></p><ul>{summary}</ul>"
+        + f"<p><strong>รายละเอียด:</strong></p><ul>{items_html}</ul>"
+        + f'<p style="font-size:12px;color:#888">กฎ: ไม่ขยับเกิน {STALE_DAYS} วัน · '
         f"ค้างสถานะเกิน {AGING_DAYS} วัน · งาน Backlog ไม่เตือน</p>"
     )
 
