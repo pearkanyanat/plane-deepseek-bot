@@ -46,6 +46,12 @@ def main() -> int:
             f"workspaces/{svc.PLANE_WORKSPACE}/projects/{project_id}/states/"
         )["results"]
     }
+    label_names = {
+        l["id"]: l["name"]
+        for l in svc.plane_api(
+            f"workspaces/{svc.PLANE_WORKSPACE}/projects/{project_id}/labels/"
+        )["results"]
+    }
 
     def closed(it: dict) -> bool:
         st = states.get(it.get("state")) or {}
@@ -76,7 +82,11 @@ def main() -> int:
             continue
         try:
             issue = svc.fetch_issue(it["id"], project_id)
-            result = svc.triage_issue(issue)
+            names = [label_names.get(x, "") for x in (issue.get("labels") or [])]
+            extra = svc.customer_context(names)
+            if extra:
+                print(f"    (มีข้อมูลลูกค้า: {', '.join(n for n in names if n.startswith('cust:'))})")
+            result = svc.triage_issue(issue, extra)
             svc.post_comment(it["id"], project_id, svc.render_triage_comment(result, issue))
             print(f"  ✓ สรุปแล้ว: THZI-{it.get('sequence_id')} {name}")
             done += 1
