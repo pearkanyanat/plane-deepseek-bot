@@ -310,19 +310,53 @@ SYSTEM_PROMPT = (
 )
 
 
-def build_prompt(issue: dict) -> str:
+def customer_context(label_names: list[str]) -> str:
+    """ดึงข้อมูลลูกค้าจาก CUSTOMERS.md ตาม label cust:<slug>"""
+    slugs = [n.split(":", 1)[1] for n in label_names if n.startswith("cust:")]
+    if not slugs:
+        return ""
+    for path in (
+        os.path.join(os.path.dirname(ROOT), "CUSTOMERS.md"),
+        os.path.join(ROOT, "CUSTOMERS.md"),
+    ):
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        chunks = []
+        for slug in slugs:
+            marker = f"cust:{slug}"
+            idx = text.find(marker)
+            if idx == -1:
+                continue
+            start = text.rfind("\n### ", 0, idx)
+            start = start if start != -1 else idx
+            end = text.find("\n### ", idx)
+            end = end if end != -1 else min(len(text), idx + 900)
+            chunks.append(text[start:end].strip()[:900])
+        if chunks:
+            return "\n\n".join(chunks)
+    return ""
+
+
+def build_prompt(issue: dict, extra: str = "") -> str:
     title = issue.get("name") or "(ไม่มีชื่อ)"
     desc = html_to_text(issue.get("description_stripped") or issue.get("description_html") or "")
     state = dig(issue, "state", "name") or issue.get("state") or "?"
     priority = issue.get("priority") or "none"
     assignees = issue.get("assignees") or []
-    return (
+    base = (
         f"ชื่อ issue: {title}\n"
         f"สถานะ: {state} | priority ปัจจุบัน: {priority}\n"
         f"ผู้รับผิดชอบ: {len(assignees)} คน\n"
-        f"รายละเอียด:\n{desc[:4000] or '(ว่าง)'}\n\n"
-        "ช่วยสรุป สร้าง label ที่เหมาะสม และเสนอขั้นตอนถัดไป"
+        f"รายละเอียด:\n{desc[:4000] or '(ว่าง)'}\n"
     )
+    if extra:
+        base += f"\nข้อมูลลูกค้าที่เกี่ยวข้อง (ใช้ประกอบการวิเคราะห์):\n{extra}\n"
+    return base + "\nช่วยสรุป สร้าง label ที่เหมาะสม และเสนอขั้นตอนถัดไป"
 
 
 def parse_ai_json(raw: str) -> dict:
@@ -334,11 +368,11 @@ def parse_ai_json(raw: str) -> dict:
     return json.loads(text[start : end + 1])
 
 
-def triage_issue(issue: dict) -> dict:
+def triage_issue(issue: dict, extra: str = "") -> dict:
     raw = deepseek(
         [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": build_prompt(issue)},
+            {"role": "user", "content": build_prompt(issue, extra)},
         ]
     )
     return parse_ai_json(raw)
@@ -442,7 +476,18 @@ def handle_event(payload: dict) -> None:
         return
 
     issue = fetch_issue(issue_id, project_id)
-    result = triage_issue(issue)
+    try:
+        label_names = {
+            l["id"]: l["name"]
+            for l in plane_api(
+                f"workspaces/{PLANE_WORKSPACE}/projects/{project_id}/labels/"
+            )["results"]
+        }
+        names = [label_names.get(x, "") for x in (issue.get("labels") or [])]
+        extra = customer_context(names)
+    except Exception:  # noqa: BLE001
+        extra = ""
+    result = triage_issue(issue, extra)
     body = render_triage_comment(result, issue)
     post_comment(issue_id, project_id, body)
     log.info("โพสต์สรุปให้ issue %s เรียบร้อย", issue_id)
