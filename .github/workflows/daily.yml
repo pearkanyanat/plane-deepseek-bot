@@ -1,9 +1,9 @@
 name: Plane daily report
 
-# 08:30 เวลาไทย = 01:30 UTC
+# 09:00 เวลาไทย = 02:00 UTC · จันทร์–ศุกร์
 on:
   schedule:
-    - cron: "30 1 * * *"
+    - cron: "0 2 * * 1-5"
   workflow_dispatch:
 
 concurrency:
@@ -30,4 +30,4 @@ jobs:
           HUB_ISSUE_ID: 90d0f8e0-2724-4a40-8bb8-41ba12b4d0c4
           STALE_DAYS: "5"
           AGING_DAYS: "14"
-        run: python scripts/health_check.py --post 90d0f8e0-2724-4a40-8bb8-41ba12b4d0c4
+        run: python -c "import sys; sys.path.insert(0, 'service'); import report; sys.exit(0 if report.run_daily_report() else 1)"
