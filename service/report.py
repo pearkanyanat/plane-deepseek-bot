@@ -106,6 +106,35 @@ def _days_since(value) -> int | None:
 # --------------------------------------------------------------------------
 
 
+def pending_intake() -> list[dict]:
+    """Intake ที่ยังไม่ถูกตัดสิน (status = -2 pending)"""
+    try:
+        rows = _api(
+            f"workspaces/{PLANE_WORKSPACE}/projects/{PLANE_PROJECT_ID}/intake-issues/?per_page=100"
+        ).get("results", [])
+    except Exception:  # noqa: BLE001
+        return []
+    now = datetime.now(timezone.utc)
+    out = []
+    for r in rows:
+        if r.get("status") != -2:
+            continue
+        created = r.get("created_at") or ""
+        try:
+            age_h = (now - datetime.fromisoformat(str(created).replace("Z", "+00:00"))).total_seconds() / 3600
+        except ValueError:
+            age_h = 0
+        det = r.get("issue_detail") or {}
+        out.append(
+            {
+                "name": det.get("name") or "(ไม่มีชื่อ)",
+                "age_hours": age_h,
+                "age_days": age_h / 24,
+            }
+        )
+    return out
+
+
 def current_cycle() -> dict | None:
     """รอบสัปดาห์ปัจจุบัน + ความคืบหน้า (ถ้ามี)"""
     try:
@@ -226,6 +255,7 @@ def collect() -> dict:
         "date": today,
         "flags": flags,
         "cycle": current_cycle(),
+        "intake": pending_intake(),
     }
 
 
@@ -242,8 +272,25 @@ def render_html(data: dict) -> str:
         f"<p><strong>📋 ตรวจงานที่อาจถูกลืม</strong> — {html.escape(data['project'])} "
         f"({data['prefix']}) วันที่ {data['date'].strftime('%d/%m/%Y')}</p>"
     )
+
+    intakes = data.get("intake") or []
+    stale = [i for i in intakes if i.get("age_hours", 0) >= 24]
+    if stale:
+        rows = "".join(
+            f"<li><strong>{html.escape(i['name'])}</strong> — ค้าง {i['age_days']:.1f} วัน</li>"
+            for i in sorted(stale, key=lambda x: -x["age_days"])
+        )
+        intake_html = (
+            f"<p><strong>📥 Intake ค้างเกิน 1 วัน:</strong> {len(stale)} รายการ "
+            f"— ต้องตัดสินวันนี้</p><ul>{rows}</ul>"
+        )
+    elif intakes:
+        intake_html = f"<p>📥 Intake ค้าง {len(intakes)} รายการ (ยังไม่เกิน 1 วัน) — รอ triage</p>"
+    else:
+        intake_html = "<p>📥 Intake: ไม่มีค้าง ✓</p>"
+
     if not flags:
-        return header + cycle_html + "<p>✓ ไม่พบงานที่ถูกลืม 🎉</p>"
+        return header + cycle_html + intake_html + "<p>✓ ไม่พบงานที่ถูกลืม 🎉</p>"
 
     items_html = "".join(
         "<li>"
@@ -267,6 +314,7 @@ def render_html(data: dict) -> str:
     return (
         header
         + cycle_html
+        + intake_html
         + f"<p><strong>สรุปตามคน:</strong></p><ul>{summary}</ul>"
         + f"<p><strong>รายละเอียด:</strong></p><ul>{items_html}</ul>"
         + f'<p style="font-size:12px;color:#888">กฎ: ไม่ขยับเกิน {STALE_DAYS} วัน · '
